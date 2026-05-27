@@ -146,6 +146,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 text = call_qwen_vl(dashscope_key, image_data, mime_type)
                 html = render_markdown(text)
                 self._send_json(200, {"html": html, "text": text})
+            except urllib.error.HTTPError as e:
+                detail = e.read().decode("utf-8", errors="replace")[:500]
+                self._send_json(e.code, {"error": f"API 调用失败: {detail}"})
             except Exception as e:
                 self._send_json(500, {"error": str(e)})
         else:
