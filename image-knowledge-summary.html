@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>知识点提取器</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans SC", sans-serif;
+    background: linear-gradient(to bottom right, #0f172a, #581c87, #312e81);
+    color: #f3f4f6;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 24px;
+    overflow-x: hidden;
+  }
+
+  /* Auroras */
+  .aurora {
+    position: fixed;
+    border-radius: 50%;
+    filter: blur(120px);
+    opacity: .3;
+    pointer-events: none;
+    z-index: 0;
+  }
+  .aurora-1 {
+    width: 500px; height: 500px;
+    background: radial-gradient(circle, #a855f7 0%, transparent 70%);
+    top: -10%; left: -5%;
+    animation: float 20s ease-in-out infinite;
+  }
+  .aurora-2 {
+    width: 400px; height: 400px;
+    background: radial-gradient(circle, #06b6d4 0%, transparent 70%);
+    top: 40%; right: -8%;
+    animation: float 20s ease-in-out infinite -7s;
+  }
+  .aurora-3 {
+    width: 450px; height: 450px;
+    background: radial-gradient(circle, #f472b6 0%, transparent 70%);
+    bottom: -10%; left: 30%;
+    animation: float 20s ease-in-out infinite -14s;
+  }
+
+  @keyframes float {
+    0%, 100% { transform: translate(0) scale(1); }
+    25% { transform: translate(30px, -40px) scale(1.1); }
+    50% { transform: translate(-20px, 20px) scale(.95); }
+    75% { transform: translate(-40px, -20px) scale(1.05); }
+  }
+  @keyframes pulse { 50% { opacity: .5; } }
+
+  .container {
+    position: relative;
+    z-index: 10;
+    width: 100%;
+    max-width: 720px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  /* Header */
+  .header {
+    text-align: center;
+    margin-bottom: 8px;
+  }
+  .header h1 {
+    font-size: 2.5rem;
+    font-weight: 700;
+    background: linear-gradient(to right, #a5b4fc, #d8b4fe, #f9a8d4);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    margin-bottom: 8px;
+  }
+  .header p {
+    color: #9ca3af;
+    font-size: .95rem;
+  }
+
+  /* Glass card */
+  .glass {
+    border: 1px solid rgba(255,255,255,.15);
+    background: rgba(255,255,255,.06);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border-radius: 1rem;
+    padding: 28px;
+    box-shadow: 0 20px 25px -5px rgba(0,0,0,.1), 0 8px 10px -6px rgba(0,0,0,.1), 0 0 40px rgba(168,85,247,.1);
+    transition: border-color .2s;
+  }
+  .card-label {
+    font-size: .85rem;
+    font-weight: 600;
+    color: #c084fc;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    margin-bottom: 16px;
+  }
+
+  /* Upload zone */
+  .upload-zone {
+    border: 2px dashed rgba(192,132,252,.3);
+    border-radius: .75rem;
+    padding: 48px 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: all .2s;
+    position: relative;
+  }
+  .upload-zone:hover {
+    border-color: rgba(192,132,252,.6);
+    background: rgba(168,85,247,.08);
+  }
+  .upload-zone.drag-over {
+    border-color: #a855f7;
+    background: rgba(168,85,247,.15);
+    box-shadow: 0 0 24px rgba(168,85,247,.2);
+  }
+  .upload-zone.has-image { padding: 16px; border-style: solid; border-color: rgba(52,211,153,.3); }
+
+  .upload-icon { font-size: 44px; margin-bottom: 12px; }
+  .upload-text { font-size: 1rem; color: #d1d5db; }
+  .upload-hint { font-size: .8rem; color: #6b7280; margin-top: 6px; }
+
+  /* Preview */
+  .preview-img {
+    max-width: 100%;
+    max-height: 380px;
+    border-radius: .5rem;
+    display: none;
+  }
+  .preview-img.visible { display: block; margin: 0 auto; }
+
+  .remove-btn {
+    display: none;
+    margin-top: 12px;
+    padding: 6px 16px;
+    border: 1px solid rgba(248,113,113,.5);
+    background: rgba(248,113,113,.1);
+    color: #fca5a5;
+    border-radius: .5rem;
+    font-size: .8rem;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .remove-btn:hover { background: rgba(248,113,113,.2); color: #fecaca; }
+  .remove-btn.visible { display: inline-block; }
+
+  /* Generate btn */
+  .generate-btn {
+    width: 100%;
+    padding: 16px;
+    border: none;
+    background: linear-gradient(to right, #6366f1, #a855f7);
+    color: #fff;
+    border-radius: .75rem;
+    font-size: 1.05rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all .2s;
+    box-shadow: 0 4px 16px rgba(168,85,247,.3);
+    position: relative;
+    overflow: hidden;
+  }
+  .generate-btn::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(to right, #818cf8, #c084fc);
+    opacity: 0;
+    transition: opacity .2s;
+  }
+  .generate-btn:hover:not(:disabled)::after { opacity: 1; }
+  .generate-btn:hover:not(:disabled) {
+    box-shadow: 0 6px 24px rgba(168,85,247,.45);
+    transform: translateY(-1px);
+  }
+  .generate-btn:active:not(:disabled) { transform: scale(.98); }
+  .generate-btn:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; }
+  .generate-btn span { position: relative; z-index: 1; }
+
+  /* Spinner */
+  .spinner-wrap {
+    display: none;
+    justify-content: center;
+    padding: 8px;
+  }
+  .spinner-wrap.visible { display: flex; }
+  .spinner {
+    width: 28px; height: 28px;
+    border: 3px solid rgba(192,132,252,.2);
+    border-top-color: #c084fc;
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Status */
+  .status {
+    display: none;
+    text-align: center;
+    font-size: .9rem;
+    color: #d1d5db;
+    padding: 12px;
+  }
+  .status.visible { display: block; }
+  .status.error {
+    color: #fca5a5;
+    background: rgba(239,68,68,.1);
+    border: 1px solid rgba(239,68,68,.2);
+    border-radius: .75rem;
+  }
+
+  /* Result */
+  .result-card { display: none; }
+  .result-card.visible { display: block; }
+
+  .result-content {
+    line-height: 1.85;
+    font-size: .95rem;
+    color: #e5e7eb;
+  }
+  .result-content h2 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: #d8b4fe;
+    margin: 24px 0 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255,255,255,.08);
+  }
+  .result-content h3 {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #c7d2fe;
+    margin: 18px 0 8px;
+  }
+  .result-content h4 { font-size: .95rem; font-weight: 600; color: #e5e7eb; margin: 14px 0 6px; }
+  .result-content p { margin: 8px 0; }
+  .result-content ul, .result-content ol {
+    padding-left: 22px;
+    margin: 10px 0;
+  }
+  .result-content li { margin: 5px 0; color: #d1d5db; }
+  .result-content li::marker { color: #8b5cf6; }
+  .result-content strong { color: #fbbf24; font-weight: 600; }
+  .result-content em { color: #c084fc; }
+  .result-content code {
+    background: rgba(255,255,255,.08);
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: .82rem;
+    color: #f9a8d4;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+  .result-content pre {
+    background: rgba(0,0,0,.4);
+    border: 1px solid rgba(255,255,255,.1);
+    padding: 16px;
+    border-radius: .5rem;
+    overflow-x: auto;
+    font-size: .82rem;
+    margin: 14px 0;
+    line-height: 1.6;
+  }
+  .result-content pre code {
+    background: none;
+    padding: 0;
+    color: #e2e8f0;
+  }
+  .result-content blockquote {
+    border-left: 3px solid #a855f7;
+    padding: 4px 0 4px 16px;
+    color: #9ca3af;
+    margin: 14px 0;
+    font-style: italic;
+  }
+  .result-content table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 14px 0;
+    font-size: .88rem;
+  }
+  .result-content th, .result-content td {
+    border: 1px solid rgba(255,255,255,.1);
+    padding: 10px 14px;
+    text-align: left;
+  }
+  .result-content th {
+    background: rgba(168,85,247,.15);
+    font-weight: 600;
+    color: #d8b4fe;
+  }
+  .result-content hr {
+    border: none;
+    border-top: 1px solid rgba(255,255,255,.08);
+    margin: 20px 0;
+  }
+
+  /* Actions */
+  .actions-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 20px;
+    justify-content: flex-end;
+  }
+  .copy-btn {
+    padding: 8px 20px;
+    border: 1px solid rgba(255,255,255,.15);
+    background: rgba(255,255,255,.06);
+    color: #d1d5db;
+    border-radius: .5rem;
+    font-size: .85rem;
+    cursor: pointer;
+    transition: all .15s;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+  .copy-btn:hover { background: rgba(255,255,255,.12); color: #fff; border-color: rgba(255,255,255,.25); }
+  .copy-btn:active { transform: scale(.97); }
+
+  input[type="file"] { display: none; }
+</style>
+</head>
+<body>
+  <!-- Aurora background orbs -->
+  <div class="aurora aurora-1"></div>
+  <div class="aurora aurora-2"></div>
+  <div class="aurora aurora-3"></div>
+
+  <div class="container">
+    <div class="header">
+      <h1>知识点提取器</h1>
+      <p>上传图片，AI 自动提取并总结核心知识点</p>
+    </div>
+
+    <!-- Upload card -->
+    <div class="glass">
+      <div class="card-label">选择图片</div>
+      <div class="upload-zone" id="uploadZone">
+        <input type="file" id="fileInput" accept="image/*" />
+        <div class="upload-icon">🖼️</div>
+        <div class="upload-text">点击选择图片或拖拽到此处</div>
+        <div class="upload-hint">JPG / PNG / WebP / GIF，最大 10MB</div>
+        <img id="preview" class="preview-img" alt="Preview" />
+      </div>
+      <div style="text-align:center">
+        <button class="remove-btn" id="removeBtn">移除图片</button>
+      </div>
+    </div>
+
+    <!-- Generate button -->
+    <button class="generate-btn" id="generateBtn" disabled>
+      <span>生成知识点</span>
+    </button>
+
+    <div class="spinner-wrap" id="spinnerWrap">
+      <div class="spinner"></div>
+    </div>
+    <div class="status" id="status"></div>
+
+    <!-- Result -->
+    <div class="glass result-card" id="resultCard">
+      <div class="card-label">生成结果</div>
+      <div class="result-content" id="resultContent"></div>
+      <div class="actions-row">
+        <button class="copy-btn" id="copyBtn">复制内容</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const uploadZone = document.getElementById('uploadZone');
+  const fileInput = document.getElementById('fileInput');
+  const preview = document.getElementById('preview');
+  const removeBtn = document.getElementById('removeBtn');
+  const generateBtn = document.getElementById('generateBtn');
+  const spinnerWrap = document.getElementById('spinnerWrap');
+  const statusEl = document.getElementById('status');
+  const resultCard = document.getElementById('resultCard');
+  const resultContent = document.getElementById('resultContent');
+  const copyBtn = document.getElementById('copyBtn');
+
+  let imageBase64 = null;
+  let resultText = '';
+
+  uploadZone.addEventListener('click', (e) => {
+    if (e.target !== removeBtn && e.target !== preview) fileInput.click();
+  });
+
+  uploadZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    uploadZone.classList.add('drag-over');
+  });
+  uploadZone.addEventListener('dragleave', () => {
+    uploadZone.classList.remove('drag-over');
+  });
+  uploadZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    uploadZone.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file && file.type.startsWith('image/')) handleFile(file);
+  });
+
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files[0];
+    if (file) handleFile(file);
+  });
+
+  removeBtn.addEventListener('click', () => {
+    imageBase64 = null;
+    preview.src = '';
+    preview.classList.remove('visible');
+    removeBtn.classList.remove('visible');
+    uploadZone.classList.remove('has-image');
+    uploadZone.querySelector('.upload-icon').style.display = '';
+    uploadZone.querySelector('.upload-text').style.display = '';
+    uploadZone.querySelector('.upload-hint').style.display = '';
+    generateBtn.disabled = true;
+    fileInput.value = '';
+  });
+
+  function handleFile(file) {
+    if (file.size > 10 * 1024 * 1024) {
+      setStatus('文件大小超过 10MB 限制', true);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      imageBase64 = { data: reader.result.split(',')[1], mime: file.type };
+      preview.src = reader.result;
+      preview.classList.add('visible');
+      removeBtn.classList.add('visible');
+      uploadZone.classList.add('has-image');
+      uploadZone.querySelector('.upload-icon').style.display = 'none';
+      uploadZone.querySelector('.upload-text').style.display = 'none';
+      uploadZone.querySelector('.upload-hint').style.display = 'none';
+      generateBtn.disabled = false;
+      hideStatus();
+    };
+    reader.readAsDataURL(file);
+  }
+
+  generateBtn.addEventListener('click', async () => {
+    if (!imageBase64) { setStatus('请先上传图片', true); return; }
+
+    hideStatus();
+    resultCard.classList.remove('visible');
+    generateBtn.disabled = true;
+    spinnerWrap.classList.add('visible');
+    setStatus('正在分析图片...', false);
+
+    try {
+      const response = await fetch('/api/summarize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: imageBase64.data, mime: imageBase64.mime }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+
+      resultContent.innerHTML = data.html;
+      resultText = data.text;
+      resultCard.classList.add('visible');
+      hideStatus();
+      resultCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } catch (err) {
+      setStatus(err.message, true);
+      resultCard.classList.remove('visible');
+    }
+
+    spinnerWrap.classList.remove('visible');
+    generateBtn.disabled = false;
+  });
+
+  copyBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(resultText).then(() => {
+      copyBtn.textContent = '已复制!';
+      setTimeout(() => { copyBtn.textContent = '复制内容'; }, 2000);
+    });
+  });
+
+  function setStatus(msg, isError) {
+    statusEl.textContent = msg;
+    statusEl.className = 'status visible' + (isError ? ' error' : '');
+  }
+  function hideStatus() { statusEl.className = 'status'; }
+</script>
+</body>
+</html>

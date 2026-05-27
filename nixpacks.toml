@@ -1,0 +1,8 @@
+[phases.setup]
+nixPkgs = ["python3"]
+
+[phases.install]
+cmds = ["echo 'no deps needed'"]
+
+[start]
+cmd = "python server.py"
