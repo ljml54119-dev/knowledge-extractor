@@ -1,7 +1,7 @@
 """
 图片知识点总结器 - 本地服务器
-使用 DeepSeek API（兼容 OpenAI 格式）
-使用前设置环境变量: set DEEPSEEK_API_KEY=sk-...
+使用阿里云通义千问 Qwen-VL-Max 视觉模型
+使用前设置环境变量: set DASHSCOPE_API_KEY=sk-...
 然后运行: python server.py
 """
 
@@ -63,25 +63,23 @@ def render_markdown(md: str) -> str:
 def _escape(s: str) -> str:
     return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
-# ---------- DeepSeek API ----------
+# ---------- Qwen VL API ----------
 
-def call_deepseek(api_key: str, image_data: str, mime_type: str) -> str:
+def call_qwen_vl(api_key: str, image_data: str, mime_type: str) -> str:
     body = json.dumps({
-        "model": "deepseek-chat",
-        "max_tokens": 2048,
-        "messages": [{
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{mime_type};base64,{image_data}"},
-                },
-                {"type": "text", "text": PROMPT},
-            ],
-        }],
+        "model": "qwen-vl-max",
+        "input": {
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"text": PROMPT},
+                    {"image": f"data:{mime_type};base64,{image_data}"},
+                ],
+            }],
+        },
     })
     req = urllib.request.Request(
-        "https://api.deepseek.com/v1/chat/completions",
+        "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
         data=body.encode("utf-8"),
         headers={
             "Content-Type": "application/json",
@@ -91,7 +89,7 @@ def call_deepseek(api_key: str, image_data: str, mime_type: str) -> str:
     )
     with urllib.request.urlopen(req) as resp:
         data = json.loads(resp.read().decode("utf-8"))
-    return data["choices"][0]["message"]["content"]
+    return data["output"]["choices"][0]["message"]["content"][0]["text"]
 
 # ---------- HTTP server ----------
 
@@ -122,10 +120,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == "/api/summarize":
-            deepseek_key = os.environ.get("DEEPSEEK_API_KEY", "")
+            dashscope_key = os.environ.get("DASHSCOPE_API_KEY", "")
 
-            if not deepseek_key:
-                self._send_json(400, {"error": "服务器未配置 DEEPSEEK_API_KEY"})
+            if not dashscope_key:
+                self._send_json(400, {"error": "服务器未配置 DASHSCOPE_API_KEY"})
                 return
 
             length = int(self.headers.get("Content-Length", 0))
@@ -145,7 +143,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
             try:
-                text = call_deepseek(deepseek_key, image_data, mime_type)
+                text = call_qwen_vl(dashscope_key, image_data, mime_type)
                 html = render_markdown(text)
                 self._send_json(200, {"html": html, "text": text})
             except Exception as e:
@@ -154,13 +152,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_error(404)
 
 def main():
-    deepseek_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    dashscope_key = os.environ.get("DASHSCOPE_API_KEY", "")
 
-    if not deepseek_key:
+    if not dashscope_key:
         print("=" * 56)
-        print("  提示: 请设置 DEEPSEEK_API_KEY 环境变量")
-        print("  Windows CMD:  set DEEPSEEK_API_KEY=sk-...")
-        print("  PowerShell:   $env:DEEPSEEK_API_KEY=\"sk-...\"")
+        print("  提示: 请设置 DASHSCOPE_API_KEY 环境变量")
+        print("  Windows CMD:  set DASHSCOPE_API_KEY=sk-...")
+        print("  PowerShell:   $env:DASHSCOPE_API_KEY=\"sk-...\"")
         print("=" * 56)
         print()
 
