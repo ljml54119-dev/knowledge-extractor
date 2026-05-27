@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI Knowledge Extractor — 图片知识点提取</title>
-<script src="https://d3js.org/d3.v7.min.js"></script>
 <style>
 :root {
   --bg: #060608;
@@ -533,6 +532,66 @@ body {
 </div>
 
 <script>
+// ==================== D3 Dynamic Loader ====================
+var d3Ready = false;
+var d3Failed = false;
+var d3Pending = [];
+var _d3Trying = false;
+var _d3Timer = null;
+
+(function initD3() {
+  if (typeof d3 !== 'undefined') { d3Ready = true; return; }
+  tryCdn(0);
+})();
+
+function tryCdn(idx) {
+  if (idx >= D3_CDNS.length) {
+    d3Failed = true;
+    flushD3Callbacks();
+    return;
+  }
+  _d3Trying = true;
+  if (_d3Timer) clearTimeout(_d3Timer);
+  var s = document.createElement('script');
+  s.src = D3_CDNS[idx];
+  s.onload = function() {
+    _d3Trying = false;
+    d3Ready = true;
+    if (_d3Timer) clearTimeout(_d3Timer);
+    flushD3Callbacks();
+  };
+  s.onerror = function() {
+    _d3Trying = false;
+    if (_d3Timer) clearTimeout(_d3Timer);
+    tryCdn(idx + 1);
+  };
+  document.head.appendChild(s);
+  _d3Timer = setTimeout(function() {
+    if (_d3Trying) {
+      _d3Trying = false;
+      s.removeAttribute('src');
+      tryCdn(idx + 1);
+    }
+  }, 5000);
+}
+
+function flushD3Callbacks() {
+  var cbs = d3Pending; d3Pending = [];
+  for (var i = 0; i < cbs.length; i++) cbs[i]();
+}
+
+function onD3Ready(cb) {
+  if (d3Ready) { cb(); return; }
+  if (d3Failed) { cb(); return; }
+  d3Pending.push(cb);
+}
+
+var D3_CDNS = [
+  'https://d3js.org/d3.v7.min.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js',
+  'https://unpkg.com/d3@7/dist/d3.min.js'
+];
+
 // ==================== DOM refs ====================
 var uploadZone = document.getElementById('uploadZone');
 var progressBar = document.getElementById('progressBar');
@@ -848,7 +907,33 @@ var ENTITY_COLORS = {
   '其他': '#cbd5e1', 'other': '#cbd5e1'
 };
 
+var pendingGraphData = null;
+
 function renderGraph(entities, relations) {
+  // Show loading state
+  graphContainer.innerHTML =
+    '<div style="display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;gap:12px;">' +
+    '<div class="skeleton" style="width:40px;height:40px;border-radius:50%;"></div>' +
+    '<span style="color:var(--text3);font-size:12px;">加载图谱引擎...</span>' +
+    '</div>';
+
+  pendingGraphData = { entities: entities, relations: relations };
+
+  onD3Ready(function() {
+    if (!pendingGraphData) return;
+    var data = pendingGraphData;
+    pendingGraphData = null;
+    if (!d3Ready) {
+      graphContainer.innerHTML =
+        '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:12px;text-align:center;padding:20px;">' +
+        '图谱引擎加载失败<br><span style="font-size:11px;">请检查网络连接后刷新页面</span></div>';
+      return;
+    }
+    _renderGraphD3(data.entities, data.relations);
+  });
+}
+
+function _renderGraphD3(entities, relations) {
   graphContainer.innerHTML = '';
   var tooltip = document.createElement('div');
   tooltip.className = 'graph-tooltip';
