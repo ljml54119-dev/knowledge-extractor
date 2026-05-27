@@ -533,44 +533,51 @@ body {
 
 <script>
 // ==================== D3 Dynamic Loader ====================
+var D3_CDNS = [
+  'https://d3js.org/d3.v7.min.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js',
+  'https://unpkg.com/d3@7/dist/d3.min.js'
+];
+
 var d3Ready = false;
 var d3Failed = false;
 var d3Pending = [];
 var _d3Trying = false;
-var _d3Timer = null;
+var _d3CdnIdx = 0;
 
 (function initD3() {
   if (typeof d3 !== 'undefined') { d3Ready = true; return; }
-  tryCdn(0);
+  tryD3();
 })();
 
-function tryCdn(idx) {
+function tryD3() {
+  var idx = _d3CdnIdx;
   if (idx >= D3_CDNS.length) {
     d3Failed = true;
     flushD3Callbacks();
     return;
   }
   _d3Trying = true;
-  if (_d3Timer) clearTimeout(_d3Timer);
   var s = document.createElement('script');
   s.src = D3_CDNS[idx];
   s.onload = function() {
+    if (d3Ready) return;
     _d3Trying = false;
     d3Ready = true;
-    if (_d3Timer) clearTimeout(_d3Timer);
     flushD3Callbacks();
   };
   s.onerror = function() {
+    if (d3Ready) return;
     _d3Trying = false;
-    if (_d3Timer) clearTimeout(_d3Timer);
-    tryCdn(idx + 1);
+    _d3CdnIdx++;
+    tryD3();
   };
   document.head.appendChild(s);
-  _d3Timer = setTimeout(function() {
-    if (_d3Trying) {
+  setTimeout(function() {
+    if (!d3Ready && _d3Trying) {
       _d3Trying = false;
-      s.removeAttribute('src');
-      tryCdn(idx + 1);
+      _d3CdnIdx++;
+      tryD3();
     }
   }, 5000);
 }
@@ -581,16 +588,9 @@ function flushD3Callbacks() {
 }
 
 function onD3Ready(cb) {
-  if (d3Ready) { cb(); return; }
-  if (d3Failed) { cb(); return; }
+  if (d3Ready || d3Failed) { cb(); return; }
   d3Pending.push(cb);
 }
-
-var D3_CDNS = [
-  'https://d3js.org/d3.v7.min.js',
-  'https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js',
-  'https://unpkg.com/d3@7/dist/d3.min.js'
-];
 
 // ==================== DOM refs ====================
 var uploadZone = document.getElementById('uploadZone');
