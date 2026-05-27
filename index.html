@@ -1,0 +1,1221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Knowledge Extractor — 图片知识点提取</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+:root {
+  --bg: #060608;
+  --bg2: #0c0c12;
+  --surface: #12131a;
+  --border: #1e1f2e;
+  --border2: #2a2b3d;
+  --text: #e4e4ec;
+  --text2: #9898b0;
+  --text3: #63637a;
+  --accent: #4f7dff;
+  --accent2: #6b5cff;
+  --green: #34d399;
+  --red: #f87171;
+  --orange: #fb923c;
+  --purple: #c084fc;
+  --radius: 10px;
+  --radius2: 16px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  overflow-x: hidden;
+  line-height: 1.6;
+}
+
+/* Background orbs */
+.bg-orb { position:fixed; border-radius:50%; filter:blur(120px); opacity:0.12; pointer-events:none; z-index:0; }
+.bg-orb.a { width:600px; height:600px; background:radial-gradient(circle, #4f7dff 0%, transparent 70%); top:-200px; left:-150px; }
+.bg-orb.b { width:500px; height:500px; background:radial-gradient(circle, #6b5cff 0%, transparent 70%); bottom:-150px; right:-100px; }
+.bg-orb.c { width:400px; height:400px; background:radial-gradient(circle, #34d399 0%, transparent 70%); top:50%; left:50%; transform:translate(-50%,-50%); }
+
+/* Header */
+.header {
+  position: relative; z-index: 1;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 28px;
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(20px);
+  background: rgba(12,12,18,0.8);
+}
+.header-l { display:flex; align-items:center; gap:12px; }
+.logo {
+  width: 34px; height: 34px;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; font-weight: 700; color: #fff;
+}
+.header h1 { font-size: 17px; font-weight: 600; letter-spacing: -0.3px; }
+.header-sub { font-size: 12px; color: var(--text3); }
+.header-r { display:flex; gap:10px; }
+
+.btn {
+  padding: 8px 16px; border-radius: 7px; border: 1px solid var(--border2);
+  background: var(--surface); color: var(--text);
+  cursor: pointer; font-size: 13px; font-family: var(--font);
+  transition: all 0.2s; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.btn:hover { border-color: var(--accent); color: #fff; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 500; }
+.btn.primary:hover { background: #5d8aff; }
+.btn.icon { padding: 8px 10px; }
+.btn:disabled { opacity: 0.4; pointer-events: none; }
+
+/* Main container */
+.main {
+  position: relative; z-index: 1;
+  max-width: 1300px; margin: 0 auto; padding: 24px;
+}
+
+/* Upload zone */
+.upload-zone {
+  border: 2px dashed var(--border2);
+  border-radius: var(--radius2);
+  padding: 48px 32px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.3s;
+  background: var(--surface);
+  position: relative;
+  overflow: hidden;
+}
+.upload-zone:hover, .upload-zone.dragover {
+  border-color: var(--accent);
+  background: rgba(79,125,255,0.05);
+}
+.upload-zone.has-result {
+  border-style: solid;
+  border-color: var(--border);
+  padding: 24px;
+  cursor: default;
+}
+.upload-icon {
+  width: 56px; height: 56px;
+  margin: 0 auto 16px;
+  background: rgba(79,125,255,0.1);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 26px;
+}
+.upload-zone h3 { font-size: 16px; font-weight: 500; margin-bottom: 6px; }
+.upload-zone p { font-size: 13px; color: var(--text3); margin-bottom: 16px; }
+
+.preview-img {
+  max-width: 200px; max-height: 140px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border2);
+  margin-bottom: 12px;
+  object-fit: contain;
+}
+
+/* Progress steps */
+.progress-bar {
+  display: flex; gap: 4px; margin: 20px 0;
+  flex-wrap: wrap;
+}
+.progress-step {
+  flex: 1; min-width: 100px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  text-align: center;
+  font-size: 12px;
+  color: var(--text3);
+  transition: all 0.3s;
+  position: relative;
+}
+.progress-step.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(79,125,255,0.08);
+}
+.progress-step.done {
+  border-color: var(--green);
+  color: var(--green);
+  background: rgba(52,211,153,0.06);
+}
+.progress-step .step-num {
+  display: inline-block;
+  width: 20px; height: 20px; line-height: 20px;
+  border-radius: 50%;
+  background: var(--border);
+  font-size: 11px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.progress-step.active .step-num { background: var(--accent); color: #fff; }
+.progress-step.done .step-num { background: var(--green); color: #000; }
+
+/* Results layout */
+.results-grid {
+  display: grid;
+  grid-template-columns: 1fr 380px;
+  gap: 20px;
+  margin-top: 20px;
+}
+.results-grid.single-col { grid-template-columns: 1fr; }
+@media (max-width: 900px) {
+  .results-grid { grid-template-columns: 1fr; }
+}
+
+/* Cards */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius2);
+  padding: 20px;
+  margin-bottom: 16px;
+}
+.card-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 14px;
+}
+.card-title {
+  font-size: 14px; font-weight: 600;
+  display: flex; align-items: center; gap: 8px;
+}
+.card-title .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+}
+
+/* Entity tags */
+.entity-tags { display:flex; flex-wrap:wrap; gap:8px; }
+.entity-tag {
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1px solid transparent;
+}
+.entity-tag:hover { transform: translateY(-1px); }
+.entity-tag.concept, .entity-tag.概念 { background: rgba(96,165,250,0.12); color: #93c5fd; border-color: rgba(96,165,250,0.2); }
+.entity-tag.person, .entity-tag.人物 { background: rgba(192,132,252,0.12); color: #d8b4fe; border-color: rgba(192,132,252,0.2); }
+.entity-tag.event, .entity-tag.事件 { background: rgba(251,146,60,0.12); color: #fdba74; border-color: rgba(251,146,60,0.2); }
+.entity-tag.tech, .entity-tag.技术 { background: rgba(74,222,128,0.12); color: #86efac; border-color: rgba(74,222,128,0.2); }
+.entity-tag.other, .entity-tag.其他 { background: rgba(148,163,184,0.1); color: #cbd5e1; border-color: rgba(148,163,184,0.15); }
+.entity-weight { font-size: 10px; opacity: 0.6; margin-left: 4px; }
+
+/* Relations */
+.rel-item {
+  padding: 10px 14px;
+  background: rgba(255,255,255,0.02);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  margin-bottom: 6px;
+  font-size: 13px;
+  display: flex; align-items: center; gap: 8px;
+}
+.rel-arrow { color: var(--accent); flex-shrink: 0; }
+.rel-label {
+  font-size: 11px; color: var(--text2);
+  background: var(--border); padding: 2px 8px; border-radius: 10px;
+}
+
+/* Sections */
+.section-block { margin-bottom: 16px; }
+.section-block h4 {
+  font-size: 15px; font-weight: 600; margin-bottom: 6px;
+  padding-bottom: 6px; border-bottom: 1px solid var(--border);
+}
+.section-content {
+  font-size: 13px; color: var(--text2); line-height: 1.7;
+}
+.section-content p { margin-bottom: 8px; }
+.section-content ul, .section-content ol { padding-left: 20px; margin-bottom: 8px; }
+.section-content li { margin-bottom: 4px; }
+.section-content code {
+  background: var(--border); padding: 2px 6px; border-radius: 4px;
+  font-size: 12px; font-family: "SF Mono", "Fira Code", monospace;
+}
+.section-content pre {
+  background: var(--bg); padding: 12px; border-radius: var(--radius);
+  overflow-x: auto; margin-bottom: 8px;
+}
+.section-content pre code { background: none; padding: 0; }
+.section-content blockquote {
+  border-left: 3px solid var(--accent); padding-left: 12px;
+  color: var(--text2); margin: 8px 0;
+}
+.section-content strong { color: var(--text); }
+.section-content h2,.section-content h3,.section-content h4 { margin: 12px 0 6px; }
+
+/* Summary card */
+.summary-card {
+  background: linear-gradient(135deg, rgba(79,125,255,0.06), rgba(107,92,255,0.06));
+  border: 1px solid rgba(79,125,255,0.2);
+  border-radius: var(--radius2);
+  padding: 18px 20px;
+}
+.summary-card .label { font-size: 11px; color: var(--accent); font-weight: 600; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+.summary-card .text { font-size: 14px; line-height: 1.7; }
+
+/* Graph container */
+.graph-container {
+  position: sticky; top: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius2);
+  overflow: hidden;
+  min-height: 400px;
+  height: calc(100vh - 140px);
+}
+.graph-container.full { height: 500px; position: static; }
+.graph-container svg { width:100%; height:100%; }
+.graph-legend {
+  position: absolute; bottom: 12px; left: 12px;
+  display: flex; flex-wrap: wrap; gap: 8px;
+  font-size: 11px;
+}
+.legend-item { display:flex; align-items:center; gap:4px; }
+.legend-dot { width:8px; height:8px; border-radius:50%; }
+
+/* Skeleton loading */
+.skeleton {
+  background: linear-gradient(90deg, var(--border) 25%, var(--border2) 50%, var(--border) 75%);
+  background-size: 200% 100%;
+  animation: sk-shimmer 1.5s infinite;
+  border-radius: 6px;
+}
+@keyframes sk-shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+.sk-title { height:20px; width:60%; margin-bottom:12px; }
+.sk-tags { display:flex; gap:8px; margin-bottom:16px; }
+.sk-tag { height:28px; width:70px; border-radius:20px; }
+.sk-lines { }
+.sk-line { height:12px; margin-bottom:8px; border-radius:4px; }
+.sk-line.s1 { width:95%; } .sk-line.s2 { width:80%; } .sk-line.s3 { width:90%; } .sk-line.s4 { width:60%; }
+.sk-graph { height:300px; border-radius:var(--radius); margin-top:16px; }
+
+/* Toast */
+.toast {
+  position: fixed; top: 20px; right: 20px; z-index: 1000;
+  padding: 12px 20px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  animation: toast-in 0.3s ease;
+  pointer-events: none;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+}
+.toast.success { background: #065f46; border: 1px solid var(--green); color: var(--green); }
+.toast.error { background: #7f1d1d; border: 1px solid var(--red); color: var(--red); }
+@keyframes toast-in { from{opacity:0;transform:translateY(-10px)} to{opacity:1;transform:translateY(0)} }
+
+/* History sidebar */
+.sidebar-overlay {
+  position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:100;
+  opacity:0; pointer-events:none; transition:opacity 0.3s;
+}
+.sidebar-overlay.open { opacity:1; pointer-events:auto; }
+.sidebar {
+  position:fixed; top:0; right:-420px; width:400px; max-width:90vw; height:100vh;
+  background:var(--bg2); border-left:1px solid var(--border);
+  z-index:101; transition:right 0.3s; display:flex; flex-direction:column;
+}
+.sidebar.open { right:0; }
+.sidebar-header {
+  padding:18px 20px; border-bottom:1px solid var(--border);
+  display:flex; align-items:center; justify-content:space-between;
+}
+.sidebar-header h3 { font-size:15px; }
+.sidebar-list { flex:1; overflow-y:auto; padding:12px; }
+.history-item {
+  padding:12px; border-radius:var(--radius); border:1px solid var(--border);
+  margin-bottom:8px; cursor:pointer; transition:all 0.2s;
+  background: var(--surface);
+}
+.history-item:hover { border-color: var(--accent); }
+.history-item .hi-title { font-size:13px; font-weight:600; margin-bottom:4px; }
+.history-item .hi-meta { font-size:11px; color:var(--text3); display:flex; gap:10px; }
+.history-item .hi-preview { width:40px; height:40px; border-radius:6px; object-fit:cover; float:right; margin-left:10px; }
+.sidebar-empty { text-align:center; padding:40px; color:var(--text3); font-size:13px; }
+
+/* Export dropdown */
+.export-menu {
+  position: relative; display: inline-block;
+}
+.export-dropdown {
+  position: absolute; top: 100%; right: 0; margin-top: 6px;
+  background: var(--bg2); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 4px;
+  min-width: 140px; display: none; z-index: 10;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+}
+.export-dropdown.show { display: block; }
+.export-option {
+  display: block; width: 100%; padding: 8px 12px;
+  border: none; background: none; color: var(--text);
+  cursor: pointer; font-size: 13px; text-align: left;
+  border-radius: 6px; font-family: var(--font);
+}
+.export-option:hover { background: rgba(255,255,255,0.05); }
+
+/* Timing badge */
+.timing-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 10px; border-radius: 20px;
+  background: rgba(52,211,153,0.08); color: var(--green);
+  font-size: 11px; font-weight: 500;
+}
+
+/* Error state */
+.error-card {
+  background: rgba(248,113,113,0.06);
+  border: 1px solid rgba(248,113,113,0.2);
+  border-radius: var(--radius2);
+  padding: 20px;
+  text-align: center;
+  color: var(--red);
+}
+
+/* Node tooltip */
+.graph-tooltip {
+  position: absolute;
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  z-index: 5;
+}
+.graph-tooltip.visible { opacity: 1; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width:5px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:var(--border2); border-radius:3px; }
+::-webkit-scrollbar-thumb:hover { background:var(--text3); }
+
+/* Utility */
+.hidden { display:none !important; }
+.text-center { text-align:center; }
+.mt-8 { margin-top:8px; }
+.mt-16 { margin-top:16px; }
+.mb-8 { margin-bottom:8px; }
+.gap-8 { gap:8px; }
+.flex-row { display:flex; align-items:center; }
+</style>
+</head>
+<body>
+<div class="bg-orb a"></div>
+<div class="bg-orb b"></div>
+<div class="bg-orb c"></div>
+
+<header class="header">
+  <div class="header-l">
+    <div class="logo">K</div>
+    <div>
+      <h1>AI Knowledge Extractor</h1>
+      <div class="header-sub">上传图片，提取结构化知识</div>
+    </div>
+  </div>
+  <div class="header-r" id="headerActions">
+    <button class="btn" onclick="openHistory()" title="历史记录">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      历史
+    </button>
+    <div class="export-menu hidden" id="exportMenu">
+      <button class="btn primary" onclick="toggleExport()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        导出
+      </button>
+      <div class="export-dropdown" id="exportDropdown">
+        <button class="export-option" onclick="doExport('json')">JSON — 结构化数据</button>
+        <button class="export-option" onclick="doExport('markdown')">Markdown — 可读文档</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="main" id="mainContainer">
+  <!-- Upload Zone -->
+  <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+    <div class="upload-icon">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+    </div>
+    <h3>上传一张图片开始分析</h3>
+    <p>支持 JPG / PNG / WebP，拖拽或点击上传</p>
+    <button class="btn primary" onclick="event.stopPropagation();document.getElementById('fileInput').click()">选择图片</button>
+    <button class="btn mt-8" onclick="event.stopPropagation();loadDemo()" style="margin-left:8px;">体验 Demo</button>
+    <input type="file" id="fileInput" accept="image/*" onchange="handleFile(this.files[0])" style="display:none">
+  </div>
+
+  <!-- Progress -->
+  <div class="progress-bar hidden" id="progressBar">
+    <div class="progress-step" data-step="0"> <div class="step-num">1</div> 上传分析 </div>
+    <div class="progress-step" data-step="1"> <div class="step-num">2</div> 提取实体 </div>
+    <div class="progress-step" data-step="2"> <div class="step-num">3</div> 关联关系 </div>
+    <div class="progress-step" data-step="3"> <div class="step-num">4</div> 构建图谱 </div>
+    <div class="progress-step" data-step="4"> <div class="step-num">5</div> 生成总结 </div>
+  </div>
+
+  <!-- Results Area -->
+  <div id="resultsArea" class="hidden">
+    <div class="results-grid" id="resultsGrid">
+      <!-- Left: structured content -->
+      <div id="resultsLeft">
+        <!-- Title & summary -->
+        <div id="resultTitleArea"></div>
+
+        <!-- Skeleton -->
+        <div id="skeletonView">
+          <div class="card">
+            <div class="skeleton sk-title"></div>
+            <div class="sk-tags"><div class="skeleton sk-tag"></div><div class="skeleton sk-tag"></div><div class="skeleton sk-tag"></div><div class="skeleton sk-tag"></div></div>
+            <div class="sk-lines"><div class="skeleton sk-line s1"></div><div class="skeleton sk-line s2"></div><div class="skeleton sk-line s3"></div><div class="skeleton sk-line s4"></div></div>
+          </div>
+          <div class="card"><div class="skeleton sk-title"></div><div class="sk-lines"><div class="skeleton sk-line s1"></div><div class="skeleton sk-line s2"></div><div class="skeleton sk-line s1"></div></div></div>
+        </div>
+
+        <!-- Real content -->
+        <div id="contentView" class="hidden">
+          <div class="card" id="entitiesCard">
+            <div class="card-header"><span class="card-title"><span class="dot" style="background:var(--accent)"></span>实体</span><span class="timing-badge hidden" id="entityCount"></span></div>
+            <div class="entity-tags" id="entityList"></div>
+          </div>
+          <div class="card" id="relationsCard">
+            <div class="card-header"><span class="card-title"><span class="dot" style="background:var(--purple)"></span>关系</span></div>
+            <div id="relationList"></div>
+          </div>
+          <div class="card" id="sectionsCard">
+            <div class="card-header"><span class="card-title"><span class="dot" style="background:var(--green)"></span>详细分析</span></div>
+            <div id="sectionList"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: knowledge graph -->
+      <div id="resultsRight">
+        <div class="graph-container" id="graphContainer">
+          <div class="graph-tooltip" id="graphTooltip"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Error -->
+  <div class="error-card hidden" id="errorCard"></div>
+</main>
+
+<!-- History Sidebar -->
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="closeHistory()"></div>
+<div class="sidebar" id="sidebar">
+  <div class="sidebar-header">
+    <h3>历史记录</h3>
+    <button class="btn icon" onclick="closeHistory()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+  <div class="sidebar-list" id="historyList">
+    <div class="sidebar-empty">加载中...</div>
+  </div>
+</div>
+
+<script>
+// ==================== DOM refs ====================
+var uploadZone = document.getElementById('uploadZone');
+var progressBar = document.getElementById('progressBar');
+var resultsArea = document.getElementById('resultsArea');
+var resultsGrid = document.getElementById('resultsGrid');
+var skeletonView = document.getElementById('skeletonView');
+var contentView = document.getElementById('contentView');
+var entityList = document.getElementById('entityList');
+var relationList = document.getElementById('relationList');
+var sectionList = document.getElementById('sectionList');
+var resultTitleArea = document.getElementById('resultTitleArea');
+var errorCard = document.getElementById('errorCard');
+var exportMenu = document.getElementById('exportMenu');
+var exportDropdown = document.getElementById('exportDropdown');
+var graphContainer = document.getElementById('graphContainer');
+var graphTooltip = document.getElementById('graphTooltip');
+var fileInput = document.getElementById('fileInput');
+var entityCount = document.getElementById('entityCount');
+
+var sidebar = document.getElementById('sidebar');
+var sidebarOverlay = document.getElementById('sidebarOverlay');
+var historyList = document.getElementById('historyList');
+
+var currentResult = null;
+var currentImage = null;
+var streamStartTime = 0;
+var graphSimulation = null;
+
+// ==================== File Handling ====================
+uploadZone.addEventListener('dragover', function(e) { e.preventDefault(); uploadZone.classList.add('dragover'); });
+uploadZone.addEventListener('dragleave', function() { uploadZone.classList.remove('dragover'); });
+uploadZone.addEventListener('drop', function(e) {
+  e.preventDefault();
+  uploadZone.classList.remove('dragover');
+  var file = e.dataTransfer.files[0];
+  if (file) handleFile(file);
+});
+
+function handleFile(file) {
+  if (!file || !file.type.match(/image\/(jpeg|png|webp)/)) {
+    showToast('请选择 JPG / PNG / WebP 格式的图片', 'error');
+    return;
+  }
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    currentImage = e.target.result.split(',')[1];
+    var mime = file.type;
+    startExtraction(currentImage, mime, file);
+  };
+  reader.readAsDataURL(file);
+}
+
+function loadDemo() {
+  // A 20x20 solid blue PNG that meets Qwen-VL minimum size requirements
+  var demoB64 = 'iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAAQElEQVQ4y2Ng+M9AAWBigAL4TwFmYKISAzJmZKISAzJmZKISAzJmZKISAzJmZKISAzJmZKISAzJmZKISAzJmZKISAzJmZKISAzJmZKISAzJmZKISAzJmZKISAzJmZKISAzJmZKISAzJmZKISAzJmZKISAzJmZKISAzJmZKISAzJmZKISAwB88gwlEqnNEwAAAABJRU5ErkJggg==';
+  currentImage = demoB64;
+  startExtraction(demoB64, 'image/png', null);
+}
+
+// ==================== SSE Extraction ====================
+function startExtraction(imgB64, mime, file) {
+  // Reset state
+  currentResult = null;
+  streamStartTime = Date.now();
+  errorCard.classList.add('hidden');
+  progressBar.classList.remove('hidden');
+  resultsArea.classList.remove('hidden');
+  resultsGrid.classList.add('single-col');
+  skeletonView.classList.remove('hidden');
+  contentView.classList.add('hidden');
+  exportMenu.classList.add('hidden');
+  resultTitleArea.innerHTML = '';
+  graphContainer.innerHTML = '';
+
+  // Reset progress steps
+  var steps = progressBar.querySelectorAll('.progress-step');
+  for (var i = 0; i < steps.length; i++) { steps[i].className = 'progress-step'; }
+  steps[0].classList.add('active');
+
+  // Show preview in upload zone
+  var previewHtml = '';
+  if (file) {
+    var url = URL.createObjectURL(file);
+    previewHtml = '<img src="' + url + '" class="preview-img" alt="预览">';
+  }
+  uploadZone.classList.add('has-result');
+  uploadZone.innerHTML = previewHtml + '<p style="font-size:12px;color:var(--text3)">正在分析中...</p><button class="btn" onclick="resetUpload()" style="font-size:11px;">重新选择</button>';
+
+  // Open SSE connection
+  fetch('/api/extract/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image: imgB64, mime: mime || 'image/png' })
+  }).then(function(response) {
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    return readSSE(response);
+  }).then(function() {
+    // stream complete
+  }).catch(function(err) {
+    showError('连接失败: ' + err.message);
+    resetProgress();
+  });
+}
+
+function readSSE(response) {
+  var reader = response.body.getReader();
+  var decoder = new TextDecoder();
+  var buffer = '';
+
+  function process() {
+    return reader.read().then(function(result) {
+      if (result.done) return;
+      buffer += decoder.decode(result.value, { stream: true });
+
+      var parts = buffer.split('\n\n');
+      buffer = parts.pop() || '';
+
+      for (var i = 0; i < parts.length; i++) {
+        var frame = parts[i].trim();
+        if (!frame) continue;
+        var eventName = '';
+        var dataStr = '';
+        var lines = frame.split('\n');
+        for (var j = 0; j < lines.length; j++) {
+          var line = lines[j];
+          if (line.indexOf('event: ') === 0) {
+            eventName = line.slice(7);
+          } else if (line.indexOf('data: ') === 0) {
+            dataStr = line.slice(6);
+          }
+        }
+        if (!dataStr) continue;
+        try {
+          var data = JSON.parse(dataStr);
+          handleSSE(eventName, data);
+        } catch(e) {}
+      }
+      return process();
+    });
+  }
+  return process();
+}
+
+function handleSSE(event, data) {
+  if (event === 'cached') {
+    showToast('命中缓存，即时返回', 'success');
+    currentResult = data;
+    renderResult(data);
+    updateProgress(5);
+    exportMenu.classList.remove('hidden');
+    return;
+  }
+  if (event === 'phase') {
+    updateProgress(data.phase);
+    return;
+  }
+  if (event === 'chunk') {
+    // raw text streaming — not shown directly, will appear in parsed result
+    return;
+  }
+  if (event === 'parsed') {
+    currentResult = data;
+    renderResult(data);
+    return;
+  }
+  if (event === 'done') {
+    showTiming();
+    return;
+  }
+  if (event === 'error') {
+    showError(data.error || '未知错误');
+    resetProgress();
+    return;
+  }
+}
+
+function updateProgress(phase) {
+  var steps = progressBar.querySelectorAll('.progress-step');
+  for (var i = 0; i < steps.length; i++) {
+    var s = steps[i];
+    var stepNum = parseInt(s.getAttribute('data-step'));
+    if (stepNum < phase) { s.className = 'progress-step done'; }
+    else if (stepNum === phase) { s.className = 'progress-step active'; }
+    else { s.className = 'progress-step'; }
+  }
+}
+
+function resetProgress() {
+  var steps = progressBar.querySelectorAll('.progress-step');
+  for (var i = 0; i < steps.length; i++) { steps[i].className = 'progress-step'; }
+}
+
+// ==================== Render ====================
+function renderResult(data) {
+  skeletonView.classList.add('hidden');
+  contentView.classList.remove('hidden');
+  resultsGrid.classList.remove('single-col');
+  exportMenu.classList.remove('hidden');
+
+  // Title & Summary
+  var title = data.title || '知识提取结果';
+  resultTitleArea.innerHTML =
+    '<div class="summary-card">' +
+    '<div class="label">AI 分析总结</div>' +
+    '<h2 style="font-size:18px;margin-bottom:8px;">' + escHtml(title) + '</h2>' +
+    '<div class="text">' + escHtml(data.summary || '') + '</div>' +
+    '</div>';
+
+  // Entities
+  var entities = data.entities || [];
+  entityCount.textContent = entities.length + '个';
+  entityCount.classList.remove('hidden');
+  var tagsHtml = '';
+  for (var i = 0; i < entities.length; i++) {
+    var e = entities[i];
+    var cls = (e.type || '其他').toLowerCase();
+    if (cls === 'person') cls = '人物';
+    if (cls === 'event') cls = '事件';
+    if (cls === 'tech' || cls === '技术') cls = '技术';
+    if (cls === 'concept' || cls === '概念') cls = '概念';
+    tagsHtml +=
+      '<span class="entity-tag ' + cls + '" data-name="' + escAttr(e.name) + '">' +
+      escHtml(e.name) +
+      (e.weight ? '<span class="entity-weight">' + e.weight + '</span>' : '') +
+      '</span>';
+  }
+  entityList.innerHTML = tagsHtml;
+
+  // Relations
+  var relations = data.relations || [];
+  var relsHtml = '';
+  for (var j = 0; j < relations.length; j++) {
+    var r = relations[j];
+    relsHtml +=
+      '<div class="rel-item">' +
+      '<strong>' + escHtml(r.from) + '</strong>' +
+      '<span class="rel-arrow">→</span>' +
+      '<strong>' + escHtml(r.to) + '</strong>' +
+      '<span class="rel-label">' + escHtml(r.label || '') + '</span>' +
+      '</div>';
+  }
+  relationList.innerHTML = relsHtml || '<p style="color:var(--text3);font-size:13px;">无关系数据</p>';
+
+  // Sections
+  var sections = data.sections || [];
+  var sectionsHtml = '';
+  for (var k = 0; k < sections.length; k++) {
+    var sec = sections[k];
+    sectionsHtml +=
+      '<div class="section-block">' +
+      '<h4>' + escHtml(sec.heading || '') + '</h4>' +
+      '<div class="section-content">' + renderMarkdown(sec.content || '') + '</div>' +
+      '</div>';
+  }
+  sectionList.innerHTML = sectionsHtml || '<p style="color:var(--text3);font-size:13px;">无详细内容</p>';
+
+  // Graph
+  renderGraph(entities, relations);
+
+  // Click on entity tags to highlight in graph
+  setTimeout(function() {
+    var tags = entityList.querySelectorAll('.entity-tag');
+    for (var t = 0; t < tags.length; t++) {
+      tags[t].addEventListener('click', function() {
+        highlightNode(this.getAttribute('data-name'));
+      });
+    }
+  }, 100);
+}
+
+// ==================== Simple Markdown Renderer ====================
+function renderMarkdown(md) {
+  if (!md) return '';
+  var html = md;
+  // Code blocks
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, function(m, lang, code) {
+    return '<pre><code>' + escHtml(code.trim()) + '</code></pre>';
+  });
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Bold
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // Italic
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  // Headers
+  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^# (.+)$/gm, '<h2>$1</h2>');
+  // Unordered lists
+  html = html.replace(/^[\-\*] (.+)$/gm, '<li>$1</li>');
+  // Wrap consecutive <li> in <ul>
+  html = html.replace(/((?:<li>.*?<\/li>\n?)+)/g, '<ul>$1</ul>');
+  // Blockquote
+  html = html.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
+  // Paragraphs
+  html = html.replace(/\n\n+/g, '</p><p>');
+  html = '<p>' + html + '</p>';
+  // Clean empty paragraphs
+  html = html.replace(/<p>\s*<\/p>/g, '');
+  html = html.replace(/<p>(<(?:h|ul|ol|pre|blockquote))/g, '$1');
+  html = html.replace(/(<\/(?:h|ul|ol|pre|blockquote)>)<\/p>/g, '$1');
+  html = html.replace(/<\/ul>\s*<ul>/g, '');
+  return html;
+}
+
+// ==================== D3 Knowledge Graph ====================
+var ENTITY_COLORS = {
+  '概念': '#93c5fd', 'concept': '#93c5fd',
+  '人物': '#d8b4fe', 'person': '#d8b4fe',
+  '事件': '#fdba74', 'event': '#fdba74',
+  '技术': '#86efac', 'tech': '#86efac',
+  '其他': '#cbd5e1', 'other': '#cbd5e1'
+};
+
+function renderGraph(entities, relations) {
+  graphContainer.innerHTML = '';
+  var tooltip = document.createElement('div');
+  tooltip.className = 'graph-tooltip';
+  tooltip.id = 'graphTooltip';
+  graphContainer.appendChild(tooltip);
+  graphTooltip = tooltip;
+
+  if (!entities || entities.length === 0) {
+    graphContainer.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:13px;">无图谱数据</div>';
+    return;
+  }
+
+  var width = graphContainer.clientWidth;
+  var height = graphContainer.clientHeight;
+  if (width === 0) width = 380;
+  if (height === 0) height = 400;
+
+  var svg = d3.select('#graphContainer')
+    .append('svg')
+    .attr('viewBox', [0, 0, width, height])
+    .attr('width', width)
+    .attr('height', height);
+
+  // Defs for glow
+  var defs = svg.append('defs');
+  var filter = defs.append('filter').attr('id', 'glow');
+  filter.append('feGaussianBlur').attr('stdDeviation', '2.5').attr('result', 'blur');
+  var merge = filter.append('feMerge');
+  merge.append('feMergeNode').attr('in', 'blur');
+  merge.append('feMergeNode').attr('in', 'SourceGraphic');
+
+  var g = svg.append('g');
+
+  // Add zoom
+  var zoom = d3.zoom()
+    .scaleExtent([0.3, 3])
+    .on('zoom', function(event) { g.attr('transform', event.transform); });
+  svg.call(zoom);
+
+  // Build graph data
+  var nodeMap = {};
+  var nodes = [];
+  for (var i = 0; i < entities.length; i++) {
+    var e = entities[i];
+    var node = {
+      id: e.name,
+      name: e.name,
+      type: e.type || '其他',
+      weight: e.weight || 5,
+      radius: 8 + (e.weight || 5) * 2.5
+    };
+    nodeMap[e.name] = node;
+    nodes.push(node);
+  }
+
+  var links = [];
+  for (var j = 0; j < relations.length; j++) {
+    var r = relations[j];
+    if (nodeMap[r.from] && nodeMap[r.to]) {
+      links.push({
+        source: r.from,
+        target: r.to,
+        label: r.label || '',
+        sourceNode: nodeMap[r.from],
+        targetNode: nodeMap[r.to]
+      });
+    }
+  }
+
+  // If no links, create a circle layout
+  if (links.length === 0 && nodes.length > 0) {
+    var cx = width / 2, cy = height / 2, r = Math.min(width, height) * 0.35;
+    for (var k = 0; k < nodes.length; k++) {
+      var angle = (2 * Math.PI * k) / nodes.length - Math.PI / 2;
+      nodes[k].x = cx + r * Math.cos(angle);
+      nodes[k].y = cy + r * Math.sin(angle);
+      nodes[k].fx = nodes[k].x;
+      nodes[k].fy = nodes[k].y;
+    }
+  }
+
+  // Links
+  var link = g.append('g').selectAll('line')
+    .data(links).join('line')
+    .attr('stroke', 'rgba(148,163,184,0.25)')
+    .attr('stroke-width', function(d) { return Math.max(1, 3 - d.sourceNode.weight / 10); })
+    .attr('marker-end', 'url(#arrowhead)');
+
+  // Link labels
+  var linkLabel = g.append('g').selectAll('text')
+    .data(links).join('text')
+    .text(function(d) { return d.label; })
+    .attr('font-size', '10px')
+    .attr('fill', 'var(--text3)')
+    .attr('text-anchor', 'middle')
+    .attr('dy', '-5');
+
+  // Nodes
+  var node = g.append('g').selectAll('g')
+    .data(nodes).join('g')
+    .attr('cursor', 'pointer')
+    .call(d3.drag()
+      .on('start', function(event, d) {
+        if (!event.active && graphSimulation) graphSimulation.alphaTarget(0.3).restart();
+        d.fx = d.x; d.fy = d.y;
+      })
+      .on('drag', function(event, d) {
+        d.fx = event.x; d.fy = event.y;
+      })
+      .on('end', function(event, d) {
+        if (!event.active && graphSimulation) graphSimulation.alphaTarget(0);
+        d.fx = null; d.fy = null;
+      })
+    );
+
+  node.append('circle')
+    .attr('r', function(d) { return d.radius; })
+    .attr('fill', function(d) { return ENTITY_COLORS[d.type] || ENTITY_COLORS['其他']; })
+    .attr('fill-opacity', 0.85)
+    .attr('stroke', function(d) { return ENTITY_COLORS[d.type] || ENTITY_COLORS['其他']; })
+    .attr('stroke-width', 1.5)
+    .attr('stroke-opacity', 0.4)
+    .attr('filter', 'url(#glow)');
+
+  node.append('text')
+    .text(function(d) { return d.name.length > 6 ? d.name.slice(0,6) + '..' : d.name; })
+    .attr('text-anchor', 'middle')
+    .attr('dy', '0.35em')
+    .attr('font-size', function(d) { return Math.max(10, 14 - Math.max(0, d.name.length - 4)); })
+    .attr('fill', '#fff')
+    .attr('font-weight', '500')
+    .attr('pointer-events', 'none');
+
+  // Tooltip
+  node.on('mouseenter', function(event, d) {
+    graphTooltip.innerHTML = '<strong>' + escHtml(d.name) + '</strong><br><span style="color:var(--text3)">类型: ' + d.type + ' · 权重: ' + d.weight + '</span>';
+    graphTooltip.classList.add('visible');
+  });
+  node.on('mousemove', function(event) {
+    var rect = graphContainer.getBoundingClientRect();
+    graphTooltip.style.left = (event.clientX - rect.left + 12) + 'px';
+    graphTooltip.style.top = (event.clientY - rect.top - 8) + 'px';
+  });
+  node.on('mouseleave', function() { graphTooltip.classList.remove('visible'); });
+
+  // Simulation (only if we have links)
+  if (links.length > 0) {
+    graphSimulation = d3.forceSimulation(nodes)
+      .force('link', d3.forceLink(links).id(function(d) { return d.name; }).distance(120))
+      .force('charge', d3.forceManyBody().strength(-400))
+      .force('center', d3.forceCenter(width / 2, height / 2))
+      .force('collision', d3.forceCollide().radius(function(d) { return d.radius + 10; }))
+      .on('tick', function() {
+        link
+          .attr('x1', function(d) { return d.source.x; })
+          .attr('y1', function(d) { return d.source.y; })
+          .attr('x2', function(d) { return d.target.x; })
+          .attr('y2', function(d) { return d.target.y; });
+
+        linkLabel
+          .attr('x', function(d) { return (d.source.x + d.target.x) / 2; })
+          .attr('y', function(d) { return (d.source.y + d.target.y) / 2; });
+
+        node.attr('transform', function(d) { return 'translate(' + d.x + ',' + d.y + ')'; });
+      });
+  } else {
+    // Static positioning
+    node.attr('transform', function(d) { return 'translate(' + (d.x || width/2) + ',' + (d.y || height/2) + ')'; });
+  }
+
+  // Add legend
+  var legend = document.createElement('div');
+  legend.className = 'graph-legend';
+  var types = {};
+  for (var t = 0; t < entities.length; t++) { types[entities[t].type || '其他'] = true; }
+  var typeKeys = Object.keys(types);
+  var legendHtml = '';
+  for (var u = 0; u < typeKeys.length; u++) {
+    var tp = typeKeys[u];
+    var color = ENTITY_COLORS[tp] || ENTITY_COLORS['其他'];
+    legendHtml += '<span class="legend-item"><span class="legend-dot" style="background:' + color + '"></span>' + tp + '</span>';
+  }
+  legend.innerHTML = legendHtml;
+  graphContainer.appendChild(legend);
+}
+
+function highlightNode(name) {
+  // Restart simulation to highlight
+  if (!graphSimulation) return;
+  // Briefly pulse the node by targeting it
+  graphSimulation.nodes().forEach(function(n) {
+    if (n.name === name) {
+      // Send a force pulse
+      n.fx = n.x; n.fy = n.y;
+      setTimeout(function() { n.fx = null; n.fy = null; }, 800);
+    }
+  });
+  graphSimulation.alpha(0.5).restart();
+}
+
+// ==================== Export ====================
+function toggleExport() {
+  exportDropdown.classList.toggle('show');
+}
+
+document.addEventListener('click', function(e) {
+  if (!exportMenu.contains(e.target)) {
+    exportDropdown.classList.remove('show');
+  }
+});
+
+function doExport(format) {
+  exportDropdown.classList.remove('show');
+  if (!currentResult) return;
+
+  fetch('/api/export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ format: format, data: currentResult })
+  }).then(function(r) { return r.json(); })
+  .then(function(d) {
+    var blob = new Blob([d.content], { type: d.type + ';charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'knowledge-extraction.' + (format === 'markdown' ? 'md' : 'json');
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('已导出 ' + format.toUpperCase() + ' 文件', 'success');
+  }).catch(function() {
+    showToast('导出失败', 'error');
+  });
+}
+
+// ==================== History ====================
+function openHistory() {
+  sidebar.classList.add('open');
+  sidebarOverlay.classList.add('open');
+  loadHistory();
+}
+
+function closeHistory() {
+  sidebar.classList.remove('open');
+  sidebarOverlay.classList.remove('open');
+}
+
+function loadHistory() {
+  historyList.innerHTML = '<div class="sidebar-empty">加载中...</div>';
+  fetch('/api/history')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var entries = d.history || [];
+      if (entries.length === 0) {
+        historyList.innerHTML = '<div class="sidebar-empty">暂无历史记录<br><br>上传图片开始使用吧</div>';
+        return;
+      }
+      var html = '';
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i];
+        var date = new Date((e.timestamp || 0) * 1000);
+        var dateStr = date.toLocaleString('zh-CN', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+        var imgTag = e.image ? '<img src="data:' + (e.mime || 'image/png') + ';base64,' + e.image + '" class="hi-preview">' : '';
+        html +=
+          '<div class="history-item" onclick="loadHistoryItem(\'' + (e.id || '') + '\')">' +
+          imgTag +
+          '<div class="hi-title">' + escHtml(e.title || '无标题') + '</div>' +
+          '<div class="hi-meta">' +
+          '<span>' + dateStr + '</span>' +
+          '<span>' + (e.entities ? e.entities.length : 0) + '个实体</span>' +
+          (e.summary ? '<span>' + escHtml(e.summary.slice(0, 30)) + '...</span>' : '') +
+          '</div></div>';
+      }
+      historyList.innerHTML = html;
+    })
+    .catch(function() {
+      historyList.innerHTML = '<div class="sidebar-empty">加载失败</div>';
+    });
+}
+
+function loadHistoryItem(id) {
+  // Load full data by fetching and finding
+  fetch('/api/history')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var entries = d.history || [];
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i].id === id) {
+          currentResult = entries[i];
+          renderResult(entries[i]);
+          closeHistory();
+          progressBar.classList.remove('hidden');
+          updateProgress(4);
+          resultsArea.classList.remove('hidden');
+          exportMenu.classList.remove('hidden');
+          uploadZone.classList.add('has-result');
+          uploadZone.innerHTML = '<p style="font-size:13px;">已加载历史记录</p><button class="btn" onclick="resetUpload()" style="font-size:11px;">重新选择</button>';
+          return;
+        }
+      }
+    });
+}
+
+// ==================== Helpers ====================
+function escHtml(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function escAttr(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function showToast(msg, type) {
+  var toast = document.createElement('div');
+  toast.className = 'toast ' + (type || 'success');
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(function() { toast.remove(); }, 2500);
+}
+
+function showTiming() {
+  var elapsed = ((Date.now() - streamStartTime) / 1000).toFixed(1);
+  var badge = document.createElement('span');
+  badge.className = 'timing-badge';
+  badge.textContent = elapsed + 's';
+  badge.style.marginLeft = '8px';
+  var titleArea = document.querySelector('.summary-card .label');
+  if (titleArea) titleArea.appendChild(badge);
+}
+
+function showError(msg) {
+  errorCard.classList.remove('hidden');
+  errorCard.innerHTML =
+    '<div style="font-size:15px;font-weight:600;margin-bottom:6px;">处理出错</div>' +
+    '<div style="font-size:13px;opacity:0.8;">' + escHtml(msg) + '</div>' +
+    '<button class="btn mt-16" onclick="errorCard.classList.add(\'hidden\');resetUpload()">重试</button>';
+  progressBar.classList.add('hidden');
+}
+
+function resetUpload() {
+  currentResult = null;
+  currentImage = null;
+  uploadZone.classList.remove('has-result');
+  uploadZone.innerHTML =
+    '<div class="upload-icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div>' +
+    '<h3>上传一张图片开始分析</h3>' +
+    '<p>支持 JPG / PNG / WebP，拖拽或点击上传</p>' +
+    '<button class="btn primary" onclick="event.stopPropagation();document.getElementById(\'fileInput\').click()">选择图片</button>' +
+    '<button class="btn mt-8" onclick="event.stopPropagation();loadDemo()" style="margin-left:8px;">体验 Demo</button>' +
+    '<input type="file" id="fileInput" accept="image/*" onchange="handleFile(this.files[0])" style="display:none">';
+  fileInput = document.getElementById('fileInput');
+  progressBar.classList.add('hidden');
+  resultsArea.classList.add('hidden');
+  exportMenu.classList.add('hidden');
+  errorCard.classList.add('hidden');
+  resetProgress();
+  graphContainer.innerHTML = '';
+}
+
+// ==================== Init ====================
+// Re-bind file input after reset
+document.addEventListener('change', function(e) {
+  if (e.target && e.target.type === 'file' && e.target.accept.indexOf('image') !== -1) {
+    if (e.target.files[0]) handleFile(e.target.files[0]);
+  }
+});
+</script>
+</body>
+</html>

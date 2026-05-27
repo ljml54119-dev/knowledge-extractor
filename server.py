@@ -1,9 +1,9 @@
 """
-AI Knowledge Extractor — 高性能版本
-- 流式 SSE 输出，用户即时看到结果
-- 多线程并发处理
-- 图片哈希缓存（相同图片秒返回）
-- 优化 Prompt，减少 Token 消耗
+AI Knowledge Extractor v3 — 产品级后端
+- 流式 SSE + 结构化提取
+- 历史记录持久化
+- 多格式导出
+- 智能缓存
 """
 
 import http.server
@@ -16,105 +16,131 @@ import threading
 import time
 import urllib.request
 import webbrowser
+import uuid
 from pathlib import Path
 from socketserver import ThreadingMixIn
 
 PORT = int(os.environ.get("PORT", 8765))
-HTML_FILE = Path(__file__).parent / "image-knowledge-summary.html"
+HTML_FILE = Path(__file__).parent / "index.html"
+DATA_FILE = Path(__file__).parent / ".extractions.json"
 
-# 精简 Prompt —— 原版 ~150 字，优化后 ~80 字，减少 50% token 消耗
 PROMPT = (
-    "仔细分析图片，提取关键知识点并结构化输出。要求：\n"
-    "1. 中文输出，按主题分组，用 ## 标题\n"
-    "2. 知识点简洁完整，公式/代码精确还原\n"
-    "3. 用列表或表格增强可读性\n"
-    "4. 末尾一段总结核心内容"
+    "分析这张图片，用如下 JSON 格式返回（只返回 JSON，不要其他文字）：\n"
+    '{\n'
+    '  "title": "图片主题（简短）",\n'
+    '  "entities": [{"name": "实体名", "type": "概念/人物/事件/技术/其他", "weight": 1-10}],\n'
+    '  "relations": [{"from": "实体A", "to": "实体B", "label": "关系描述"}],\n'
+    '  "sections": [{"heading": "标题", "content": "要点（markdown）"}],\n'
+    '  "summary": "一句话总结"\n'
+    '}\n'
+    "要求：中文输出，entities 至少 3 个，relations 至少 2 条，sections 至少 2 个。"
 )
 
-# 内存缓存：key = sha256(image_data + prompt), value = (timestamp, html, text)
-# TTL = 30 分钟，最多缓存 50 条
+# ---------- Cache ----------
 CACHE = {}
+CACHE_LOCK = threading.Lock()
 CACHE_MAX = 50
 CACHE_TTL = 1800
-CACHE_LOCK = threading.Lock()
+
+# ---------- History ----------
+HISTORY_LOCK = threading.Lock()
+MAX_HISTORY = 20
 
 
-def cache_key(image_data: str) -> str:
-    return hashlib.sha256(image_data.encode()[:4096]).hexdigest()
+def load_history():
+    try:
+        if DATA_FILE.exists():
+            return json.loads(DATA_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return []
+
+
+def save_history(entries):
+    try:
+        DATA_FILE.write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def add_history(entry):
+    with HISTORY_LOCK:
+        entries = load_history()
+        entries.insert(0, entry)
+        if len(entries) > MAX_HISTORY:
+            entries = entries[:MAX_HISTORY]
+        save_history(entries)
+
+
+def get_history(limit=10):
+    with HISTORY_LOCK:
+        entries = load_history()
+    return entries[:limit]
+
+
+# ---------- Cache helpers ----------
+def cache_key(img: str) -> str:
+    return hashlib.sha256(img.encode()[:4096]).hexdigest()
 
 
 def cache_get(key: str):
     now = time.time()
     with CACHE_LOCK:
-        entry = CACHE.get(key)
-        if entry and now - entry[0] < CACHE_TTL:
-            return entry[1], entry[2]
-        if entry:
+        e = CACHE.get(key)
+        if e and now - e[0] < CACHE_TTL:
+            return e[1]
+        if e:
             del CACHE[key]
     return None
 
 
-def cache_set(key: str, html: str, text: str):
+def cache_set(key: str, data: dict):
     now = time.time()
     with CACHE_LOCK:
         if len(CACHE) >= CACHE_MAX:
             oldest = min(CACHE, key=lambda k: CACHE[k][0])
             del CACHE[oldest]
-        CACHE[key] = (now, html, text)
+        CACHE[key] = (now, data)
 
 
-# ---------- Markdown renderer ----------
-
-_RE_CODE_BLOCK = re.compile(r'```(\w*)\n(.*?)```', re.DOTALL)
-_RE_INLINE_CODE = re.compile(r'`([^`]+)`')
-_RE_BOLD = re.compile(r'\*\*(.+?)\*\*')
-_RE_ITALIC = re.compile(r'\*(.+?)\*')
-_RE_H4 = re.compile(r'^#### (.+)$', re.MULTILINE)
-_RE_H3 = re.compile(r'^### (.+)$', re.MULTILINE)
-_RE_H2 = re.compile(r'^## (.+)$', re.MULTILINE)
-_RE_H1 = re.compile(r'^# (.+)$', re.MULTILINE)
+# ---------- Markdown ----------
+_RE_CODE = re.compile(r'```(\w*)\n(.*?)```', re.DOTALL)
+_RE_IC = re.compile(r'`([^`]+)`')
+_RE_B = re.compile(r'\*\*(.+?)\*\*')
+_RE_I = re.compile(r'\*(.+?)\*')
+_RE_H = {n: re.compile(rf'^{"#"*n} (.+)$', re.MULTILINE) for n in (1,2,3,4)}
 _RE_UL = re.compile(r'^[\-\*] (.+)$', re.MULTILINE)
-_RE_OL = re.compile(r'^\d+\. (.+)$', re.MULTILINE)
 _RE_BQ = re.compile(r'^> (.+)$', re.MULTILINE)
-_RE_HR = re.compile(r'^---+$', re.MULTILINE)
 
 
-def _escape(s: str) -> str:
+def _esc(s):
     return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
 
 def render_markdown(md: str) -> str:
     html = md
-    html = _RE_CODE_BLOCK.sub(
-        lambda m: f'<pre><code>{_escape(m.group(2).rstrip())}</code></pre>', html)
-    html = _RE_INLINE_CODE.sub(r'<code>\1</code>', html)
-    html = _RE_BOLD.sub(r'<strong>\1</strong>', html)
-    html = _RE_ITALIC.sub(r'<em>\1</em>', html)
-    html = _RE_H4.sub(r'<h4>\1</h4>', html)
-    html = _RE_H3.sub(r'<h3>\1</h3>', html)
-    html = _RE_H2.sub(r'<h2>\1</h2>', html)
-    html = _RE_H1.sub(r'<h2>\1</h2>', html)
+    html = _RE_CODE.sub(lambda m: f'<pre><code>{_esc(m.group(2).rstrip())}</code></pre>', html)
+    html = _RE_IC.sub(r'<code>\1</code>', html)
+    html = _RE_B.sub(r'<strong>\1</strong>', html)
+    html = _RE_I.sub(r'<em>\1</em>', html)
+    for n in (4,3,2,1):
+        html = _RE_H[n].sub(rf'<h{n}>\1</h{n}>', html)
     html = _RE_UL.sub(r'<li>\1</li>', html)
     html = re.sub(r'((?:<li>.*?</li>\n?)+)', r'<ul>\1</ul>', html)
-    html = _RE_OL.sub(r'<li>\1</li>', html)
     html = _RE_BQ.sub(r'<blockquote>\1</blockquote>', html)
-    html = _RE_HR.sub(r'<hr>', html)
     html = re.sub(r'\n\n+', '</p><p>', html)
     html = '<p>' + html + '</p>'
-    for tag in ('h2', 'h3', 'h4', 'ul', 'ol', 'pre', 'blockquote', 'hr'):
-        html = re.sub(rf'<p>(<{tag})', r'\1', html)
-    for tag in ('h2', 'h3', 'h4', 'ul', 'ol', 'pre', 'blockquote'):
-        html = re.sub(rf'(</{tag}>)</p>', r'\1', html)
+    for t in ('h2','h3','h4','ul','ol','pre','blockquote'):
+        html = re.sub(rf'<p>(<{t})', r'\1', html)
+        html = re.sub(rf'(</{t}>)</p>', r'\1', html)
     html = re.sub(r'<p>\s*</p>', '', html)
     html = re.sub(r'</ul>\s*<ul>', '', html)
-    html = re.sub(r'</ol>\s*<ol>', '', html)
     return html
 
 
-# ---------- Streaming Qwen VL ----------
-
-def stream_qwen_vl(api_key: str, image_data: str, mime_type: str):
-    """SSE generator: yields (type, content) tuples — 'chunk' or 'done'."""
+# ---------- LLM Call ----------
+def stream_qwen_vl(api_key: str, image_b64: str, mime: str):
+    """SSE generator yielding (type, data) tuples."""
     body = json.dumps({
         "model": "qwen-vl-max",
         "input": {
@@ -122,7 +148,7 @@ def stream_qwen_vl(api_key: str, image_data: str, mime_type: str):
                 "role": "user",
                 "content": [
                     {"text": PROMPT},
-                    {"image": f"data:{mime_type};base64,{image_data}"},
+                    {"image": f"data:{mime};base64,{image_b64}"},
                 ],
             }],
         },
@@ -138,70 +164,104 @@ def stream_qwen_vl(api_key: str, image_data: str, mime_type: str):
         },
         method="POST",
     )
-    full_text = ""
+    full = ""
+    seen = set()
+    phase = 0
+
     with urllib.request.urlopen(req, timeout=120) as resp:
         for line in resp:
             line = line.decode("utf-8", errors="replace").strip()
             if not line or not line.startswith("data:"):
                 continue
-            data_str = line[5:].strip()
-            if not data_str:
+            ds = line[5:].strip()
+            if not ds:
                 continue
             try:
-                data = json.loads(data_str)
-                output = data.get("output", {})
-                choices = output.get("choices", [])
+                d = json.loads(ds)
+                choices = d.get("output", {}).get("choices", [])
                 if not choices:
                     continue
                 msg = choices[0].get("message", {})
-                content_list = msg.get("content", [])
-                if not content_list:
+                cl = msg.get("content", [])
+                if not cl:
                     continue
-                new_text = content_list[0].get("text", "")
+                txt = cl[0].get("text", "")
             except json.JSONDecodeError:
                 continue
 
-            if new_text and new_text != full_text:
-                delta = new_text[len(full_text):]
-                full_text = new_text
-                yield "chunk", delta
+            if txt and txt != full:
+                delta = txt[len(full):]
+                full = txt
+                yield "chunk", {"delta": delta}
+
+                # Phase detection: as more data arrives, signal progress
+                new_phase = phase
+                if "entities" in full and "relations" not in full:
+                    new_phase = 1
+                elif "relations" in full and "sections" not in full:
+                    new_phase = 2
+                elif "sections" in full and "summary" not in full:
+                    new_phase = 3
+                elif "summary" in full:
+                    new_phase = 4
+                if new_phase > phase:
+                    phase = new_phase
+                    yield "phase", {"phase": phase}
 
             if choices[0].get("finish_reason") == "stop":
                 break
 
-    yield "done", full_text
+    # Parse JSON result
+    yield "phase", {"phase": 5}
+    try:
+        # Try to extract JSON from the response
+        json_match = re.search(r'\{[\s\S]*\}', full)
+        if json_match:
+            parsed = json.loads(json_match.group(0))
+        else:
+            # Fallback: extract structured info from free text
+            parsed = _extract_from_text(full)
+    except json.JSONDecodeError:
+        parsed = _extract_from_text(full)
+
+    parsed["raw_text"] = full
+    yield "parsed", parsed
 
 
-def call_qwen_vl_nonstream(api_key: str, image_data: str, mime_type: str) -> str:
-    """Fallback: non-streaming call."""
-    body = json.dumps({
-        "model": "qwen-vl-max",
-        "input": {
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"text": PROMPT},
-                    {"image": f"data:{mime_type};base64,{image_data}"},
-                ],
-            }],
-        },
-    })
-    req = urllib.request.Request(
-        "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
-        data=body.encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    return data["output"]["choices"][0]["message"]["content"][0]["text"]
+def _extract_from_text(text: str) -> dict:
+    """Fallback structured extraction from markdown text."""
+    sections = []
+    current = {"heading": "分析结果", "content": ""}
+    for line in text.split('\n'):
+        if line.startswith('## ') or line.startswith('### '):
+            if current["content"].strip():
+                sections.append(current)
+            current = {"heading": line.lstrip('#').strip(), "content": ""}
+        else:
+            current["content"] += line + '\n'
+    if current["content"].strip():
+        sections.append(current)
+
+    entities = []
+    # Simple entity extraction
+    for match in re.finditer(r'\*\*(.+?)\*\*', text):
+        name = match.group(1)
+        if len(name) < 20 and name not in [e["name"] for e in entities]:
+            entities.append({"name": name, "type": "概念", "weight": 5})
+
+    return {
+        "title": sections[0]["heading"] if sections else "分析结果",
+        "entities": entities[:10] if entities else [
+            {"name": "主题概念", "type": "概念", "weight": 5}
+        ],
+        "relations": [],
+        "sections": sections if sections else [{"heading": "分析结果", "content": text}],
+        "summary": text[:200] if text else "请查看详细分析结果",
+        "raw_text": text,
+    }
 
 
-# ---------- Threaded HTTP server ----------
-
+# ---------- HTTP Handler ----------
 class ThreadedHTTPServer(ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
 
@@ -213,16 +273,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         sys.stdout.write(f"[{self.address_string()}] {args[0]}\n")
         sys.stdout.flush()
 
-    def _send_json(self, status: int, data: dict):
+    def _json(self, code: int, data: dict):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
+        self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", len(body))
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_sse_headers(self):
+    def _sse_init(self):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache, no-store")
@@ -230,13 +290,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
 
-    def _sse_event(self, event: str, data: str):
+    def _sse(self, event: str, data):
         msg = f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
         self.wfile.write(msg.encode("utf-8"))
         self.wfile.flush()
 
     def do_GET(self):
-        if self.path in ("/", "/index.html"):
+        path = self.path.split('?')[0]
+        if path in ("/", "/index.html"):
             html = HTML_FILE.read_text(encoding="utf-8")
             data = html.encode("utf-8")
             self.send_response(200)
@@ -245,130 +306,115 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "public, max-age=3600")
             self.end_headers()
             self.wfile.write(data)
+        elif path == "/api/history":
+            self._json(200, {"history": get_history()})
         else:
             self.send_error(404)
 
     def do_POST(self):
-        if self.path == "/api/summarize":
-            self._handle_summarize()
-        elif self.path == "/api/summarize/stream":
-            self._handle_summarize_stream()
+        path = self.path.split('?')[0]
+        if path == "/api/extract/stream":
+            self._handle_stream()
+        elif path == "/api/export":
+            self._handle_export()
         else:
             self.send_error(404)
 
     def _read_body(self):
         length = int(self.headers.get("Content-Length", 0))
-        if length == 0:
-            self._send_json(400, {"error": "请求体为空"})
-            return None
-        if length > 12 * 1024 * 1024:
-            self._send_json(400, {"error": "图片太大，限制 10MB"})
+        if length == 0 or length > 12 * 1024 * 1024:
             return None
         return json.loads(self.rfile.read(length))
 
-    def _get_api_key(self):
+    def _get_key(self):
         key = os.environ.get("DASHSCOPE_API_KEY", "")
         if not key:
-            self._send_json(400, {"error": "服务器未配置 DASHSCOPE_API_KEY"})
+            self._json(400, {"error": "DASHSCOPE_API_KEY not set"})
             return None
         return key
 
-    def _handle_summarize(self):
-        """非流式端点（缓存命中时秒返回）"""
-        api_key = self._get_api_key()
+    def _handle_stream(self):
+        api_key = self._get_key()
         if not api_key:
             return
         body = self._read_body()
-        if body is None:
+        if not body:
+            self._json(400, {"error": "Invalid request"})
             return
 
-        image_data = body.get("image")
-        mime_type = body.get("mime", "image/png")
-        if not image_data:
-            self._send_json(400, {"error": "未提供图片数据"})
+        img = body.get("image", "")
+        mime = body.get("mime", "image/png")
+        if not img:
+            self._json(400, {"error": "No image data"})
             return
 
-        # 检查缓存
-        ck = cache_key(image_data)
+        ck = cache_key(img)
         cached = cache_get(ck)
         if cached:
-            self._send_json(200, {"html": cached[0], "text": cached[1], "cached": True})
+            self._sse_init()
+            self._sse("cached", cached)
+            self._sse("done", {"status": "complete"})
             return
 
+        self._sse_init()
+        self._sse("phase", {"phase": 0, "label": "正在上传分析..."})
+
+        final = None
         try:
-            text = call_qwen_vl_nonstream(api_key, image_data, mime_type)
-            html = render_markdown(text)
-            cache_set(ck, html, text)
-            self._send_json(200, {"html": html, "text": text, "cached": False})
+            for evt, data in stream_qwen_vl(api_key, img, mime):
+                self._sse(evt, data)
+                if evt == "parsed":
+                    final = data
         except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", errors="replace")[:500]
-            self._send_json(e.code, {"error": f"API 调用失败: {detail}"})
-        except Exception as e:
-            self._send_json(500, {"error": str(e)})
-
-    def _handle_summarize_stream(self):
-        """流式 SSE 端点"""
-        api_key = self._get_api_key()
-        if not api_key:
+            detail = e.read().decode("utf-8", errors="replace")[:300]
+            self._sse("error", {"error": f"AI 处理失败，正在重试... ({detail[:100]})"})
             return
+        except Exception as e:
+            self._sse("error", {"error": f"连接异常: {str(e)[:200]}"})
+            return
+
+        if final:
+            final["id"] = uuid.uuid4().hex[:8]
+            final["timestamp"] = int(time.time())
+            final["mime"] = mime
+            final["image"] = img[:200]  # thumbnail reference
+            cache_set(ck, final)
+            add_history(final)
+
+        self._sse("done", {"status": "complete"})
+
+    def _handle_export(self):
         body = self._read_body()
-        if body is None:
+        if not body:
+            self._json(400, {"error": "Invalid request"})
             return
-
-        image_data = body.get("image")
-        mime_type = body.get("mime", "image/png")
-        if not image_data:
-            self._send_json(400, {"error": "未提供图片数据"})
-            return
-
-        # Check cache
-        ck = cache_key(image_data)
-        cached = cache_get(ck)
-        if cached:
-            # 缓存命中也用 SSE 返回，前端统一处理
-            self._send_sse_headers()
-            self._sse_event("cached", {"html": cached[0], "text": cached[1]})
-            self._sse_event("done", {"status": "complete"})
-            return
-
-        self._send_sse_headers()
-
-        accumulated = ""
-        try:
-            for evt_type, content in stream_qwen_vl(api_key, image_data, mime_type):
-                if evt_type == "chunk":
-                    self._sse_event("chunk", {"delta": content})
-                elif evt_type == "done":
-                    accumulated = content
-                    html = render_markdown(accumulated)
-                    cache_set(ck, html, accumulated)
-                    self._sse_event("rendered", {"html": html, "text": accumulated})
-                    self._sse_event("done", {"status": "complete"})
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", errors="replace")[:500]
-            self._sse_event("error", {"error": f"API 调用失败: {detail}"})
-        except Exception as e:
-            self._sse_event("error", {"error": str(e)})
+        fmt = body.get("format", "json")
+        data = body.get("data", {})
+        if fmt == "markdown":
+            md = f"# {data.get('title', 'Knowledge Extraction')}\n\n"
+            for s in data.get("sections", []):
+                md += f"## {s.get('heading', '')}\n\n{s.get('content', '')}\n\n"
+            md += f"\n---\n**总结**: {data.get('summary', '')}"
+            self._json(200, {"content": md, "type": "text/markdown"})
+        else:
+            self._json(200, {"content": json.dumps(data, ensure_ascii=False, indent=2), "type": "application/json"})
 
 
 def main():
-    dashscope_key = os.environ.get("DASHSCOPE_API_KEY", "")
-    if not dashscope_key:
+    key = os.environ.get("DASHSCOPE_API_KEY", "")
+    if not key:
         print("=" * 56)
         print("  提示: 请设置 DASHSCOPE_API_KEY 环境变量")
-        print("  Windows CMD:  set DASHSCOPE_API_KEY=sk-...")
-        print("  PowerShell:   $env:DASHSCOPE_API_KEY=\"sk-...\"")
         print("=" * 56)
         print()
 
     addr = ("0.0.0.0", PORT)
     server = ThreadedHTTPServer(addr, Handler)
     url = f"http://localhost:{PORT}"
-    print(f"AI Knowledge Extractor: {url}")
-    print(f"  支持: SSE 流式输出 | 多线程并发 | 结果缓存")
-    print("  按 Ctrl+C 停止\n")
+    print(f"\n  AI Knowledge Extractor v3")
+    print(f"  {url}")
+    print(f"  流式输出 | 知识图谱 | 历史记录 | 多格式导出\n")
     webbrowser.open(url)
-
     try:
         server.serve_forever()
     except KeyboardInterrupt:
