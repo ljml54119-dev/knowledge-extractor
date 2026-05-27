@@ -1,7 +1,7 @@
 """
 图片知识点总结器 - 本地服务器
-支持 Google Gemini（免费）和 Anthropic Claude
-使用前设置环境变量: set GEMINI_API_KEY=你的key
+使用 DeepSeek API（兼容 OpenAI 格式）
+使用前设置环境变量: set DEEPSEEK_API_KEY=sk-...
 然后运行: python server.py
 """
 
@@ -63,60 +63,35 @@ def render_markdown(md: str) -> str:
 def _escape(s: str) -> str:
     return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
-# ---------- Gemini API ----------
+# ---------- DeepSeek API ----------
 
-def call_gemini(api_key: str, image_data: str, mime_type: str) -> str:
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.5-flash:generateContent?key={api_key}"
-    )
+def call_deepseek(api_key: str, image_data: str, mime_type: str) -> str:
     body = json.dumps({
-        "contents": [{
-            "parts": [
-                {"text": PROMPT},
-                {"inline_data": {"mime_type": mime_type, "data": image_data}},
-            ]
-        }]
-    })
-
-    req = urllib.request.Request(
-        url, data=body.encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST",
-    )
-    with urllib.request.urlopen(req) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    return data["candidates"][0]["content"]["parts"][0]["text"]
-
-# ---------- Anthropic API (fallback) ----------
-
-def call_anthropic(api_key: str, image_data: str, mime_type: str) -> str:
-    body = json.dumps({
-        "model": "claude-sonnet-4-6",
+        "model": "deepseek-chat",
         "max_tokens": 2048,
         "messages": [{
             "role": "user",
             "content": [
                 {
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": mime_type, "data": image_data},
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{image_data}"},
                 },
                 {"type": "text", "text": PROMPT},
             ],
         }],
     })
     req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
+        "https://api.deepseek.com/v1/chat/completions",
         data=body.encode("utf-8"),
         headers={
             "Content-Type": "application/json",
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
+            "Authorization": f"Bearer {api_key}",
         },
         method="POST",
     )
     with urllib.request.urlopen(req) as resp:
         data = json.loads(resp.read().decode("utf-8"))
-    return data["content"][0]["text"]
+    return data["choices"][0]["message"]["content"]
 
 # ---------- HTTP server ----------
 
@@ -147,12 +122,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == "/api/summarize":
-            # Prefer Gemini (free), fall back to Anthropic
-            gemini_key = os.environ.get("GEMINI_API_KEY", "")
-            anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            deepseek_key = os.environ.get("DEEPSEEK_API_KEY", "")
 
-            if not gemini_key and not anthropic_key:
-                self._send_json(400, {"error": "服务器未配置 API Key"})
+            if not deepseek_key:
+                self._send_json(400, {"error": "服务器未配置 DEEPSEEK_API_KEY"})
                 return
 
             length = int(self.headers.get("Content-Length", 0))
@@ -172,10 +145,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
             try:
-                if gemini_key:
-                    text = call_gemini(gemini_key, image_data, mime_type)
-                else:
-                    text = call_anthropic(anthropic_key, image_data, mime_type)
+                text = call_deepseek(deepseek_key, image_data, mime_type)
                 html = render_markdown(text)
                 self._send_json(200, {"html": html, "text": text})
             except Exception as e:
@@ -184,14 +154,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_error(404)
 
 def main():
-    gemini_key = os.environ.get("GEMINI_API_KEY", "")
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    deepseek_key = os.environ.get("DEEPSEEK_API_KEY", "")
 
-    if not gemini_key and not anthropic_key:
+    if not deepseek_key:
         print("=" * 56)
-        print("  提示: 请设置 API Key 环境变量")
-        print("  Gemini (免费):  set GEMINI_API_KEY=你的key")
-        print("  Anthropic:      set ANTHROPIC_API_KEY=sk-ant-...")
+        print("  提示: 请设置 DEEPSEEK_API_KEY 环境变量")
+        print("  Windows CMD:  set DEEPSEEK_API_KEY=sk-...")
+        print("  PowerShell:   $env:DEEPSEEK_API_KEY=\"sk-...\"")
         print("=" * 56)
         print()
 
