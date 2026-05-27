@@ -303,7 +303,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", len(data))
-            self.send_header("Cache-Control", "public, max-age=3600")
+            self.send_header("Cache-Control", "no-cache, must-revalidate")
             self.end_headers()
             self.wfile.write(data)
         elif path == "/api/history":
